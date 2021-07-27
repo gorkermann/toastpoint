@@ -9,7 +9,7 @@ The code
 
 attempts to turn <code>obj</code> into a JSON string. This doesn't work well if the object contains pointers to other objects, which you *also* want to stringify. At best, space is wasted, and at worst, the conversion fails due to loops in the object tree.
 
-toastpoint converts an array of 'first-class' objects to JSON, except that if one first-class object contains another, that entry is replaced by a 'pointer', which looks thus:
+Toastpoint converts an array of 'first-class' objects to JSON, except that if one first-class object contains another, that entry is replaced by a 'pointer', which looks thus:
 
 <code>
   {
@@ -18,7 +18,8 @@ toastpoint converts an array of 'first-class' objects to JSON, except that if on
   }
 </code>
 
-each first class object contains a unique parameter <code>id</code> which serves as an address. With toastpoint, complex object trees can be saved and reconstructed easily.
+
+Each first class object contains a unique parameter <code>id</code> which serves as an address. With toastpoint, complex object trees can be saved and reconstructed easily.
 
 ## caveats
 
