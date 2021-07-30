@@ -1,43 +1,193 @@
 export function listToJSON( list: Array<any>, constructors: { [key: string]: any } ): any {
 	let output: Array<any> = [];
+	let idIndex: Array<any> = [];
 
-	for ( let i in list ) {
-		output[i] = toJSON( list[i], constructors, true );
+	try {
+		for ( let i in list ) {
+			output[i] = toJSON( list[i], constructors, idIndex, [] );
+		}
+
+	} catch( error ) {
+		console.log( error );
+
+	} finally {
+		for ( let i = 0; i < idIndex.length; i++ ) {
+			if ( !( i in idIndex ) ) {
+				console.log( 'listToJSON: missing __id__ ' + i );
+			}
+		}
+
+		for ( let obj of idIndex ) {
+			if ( !( '__id__' in obj ) ) {
+				throw 'listToJSON: object lacks __id__';
+			}
+			
+			delete obj['__id__'];
+			delete obj['__written__'];
+		}
 	}
 
 	return output;
 }
 
-export function toJSON( obj: any, constructors: { [key: string]: any }, toplevel: boolean=false): any {
-	//let flattened: { [key: string]: any } = {};
+function shouldBePointer( obj: any, 
+					      idIndex: Array<any>, 
+					      constructors: { [key: string]: any } ): boolean
+{
+	if ( obj instanceof Object && '__id__' in obj ) {
+		if ( obj['__id__'] in idIndex && obj['__written__'] ) {
+			return true;
+		}
+	}
+
+	// either not a pointer-able object, or needs to be added to idIndex
+	return false;
+}
+
+function addToIndex( obj: any, 
+					 idIndex: Array<any>, 
+					 constructors: { [key: string]: any } ): boolean
+{
+	if ( obj instanceof Object ) {
+		if ( obj.constructor.name != 'Object' && obj.constructor.name != 'Array' &&
+		     !( obj.constructor.name in constructors ) ) {
+			throw 'missing constructor for ' + obj.constructor.name;
+		}
+
+		if ( !( '__id__' in obj ) ) {
+			idIndex.push( obj );
+			obj['__id__'] = idIndex.length - 1;
+			obj['__written__'] = false;
+			return true;
+
+		} else {
+			if ( idIndex[obj['__id__']] != obj ) {
+				throw 'addToIndex: __id__ collision at ' + obj['__id__'];
+			}
+		}
+	}
+
+	return false;
+}
+
+function printTrail( trail: Array<any>, obj: any, reading: boolean=false ) {
+	let str = '';
+
+	// pad out for depth
+	for ( let entry of trail ) {
+		str += '  ';
+	}
+
+	// variable name or array index
+	if ( trail.length > 0 ) {
+		str += trail[trail.length - 1] + ' ';		
+	}
+
+	// object type and value
+	let type = typeof( obj );
+	if ( typeof( obj ) == 'object' && obj ) {
+		if ( reading && '__class__' in obj ) {		
+			type = obj['__class__'];
+		} else {
+			type = obj.constructor.name;
+		}
+
+	} else {
+		if ( typeof( obj ) == 'string' ) {
+			str += '\"' + obj + '\"' + ' ';
+		} else {
+			str += obj + ' ';	
+		}
+	}
+
+	str += type;
+
+	// pointers
+	if ( typeof( obj ) == 'object' && obj ) {
+		if ( reading ) {
+			if ( '__pointer__' in obj ) str += ' -> ' + obj['__pointer__'];
+			if ( '__id__' in obj ) str += ':' + obj['__id__']; 
+		} else { 
+			if ( '__id__' in obj ) str += ' -> ' + obj['__id__'];
+		}
+	}
+
+	console.log( str );
+}
+
+export function toJSON( obj: any, 				
+						constructors: { [key: string]: any },
+						idIndex: Array<any>,
+						trail: Array<any> ): any 
+{
+	printTrail( trail, obj );
+
+	if ( trail.length > 20 ) {
+		throw 'Maximum recursion depth exceeded';
+	}
 
 	if ( obj === null || obj === undefined ) {
 		return obj;
 
-	} else if ( !toplevel && obj.constructor.name in constructors ) {
-		return toJSONPointer( obj );
+	} else if ( shouldBePointer( obj, idIndex, constructors ) ) {
+		return toJSONPointer( obj, idIndex );
 
 	} else if ( obj.toJSON ) {
-		return obj.toJSON( constructors );
+		addToIndex( obj, idIndex, constructors );
+		if ( '__id__' in obj ) {
+			obj['__written__'] = true;
+		}
 
-	} else if ( obj instanceof Array ) {
+		let output = obj.toJSON( constructors, idIndex );
+		if ( '__id__' in obj ) {
+			output['__id__'] = obj['__id__'];
+		}
+
+		return output;
+
+	}/* else if ( obj instanceof Array ) {
+
+		// add array to object index
+		addToIndex( obj, idIndex, constructors );
+
+		if ( '__id__' in obj as any ) {
+			(obj as any)['__written__'] = true;
+		}
+
+		// convert array members to JSON
 		let arr: Array<any> = [];
 
 		for ( let i in obj ) {
-			arr[i] = toJSON( obj[i], constructors );
+			if ( i == '__written__') continue;
+
+			arr[i] = toJSON( obj[i], constructors, idIndex, trail.concat( i + '' ) );
 		}
+
+		// insert id
+		(arr as any)['__id__'] = (obj as any)['__id__'];
 
 		return arr;
 
-	} else if ( obj instanceof Object ) {
-		let flat: any = {};
+	}*/ else if ( obj instanceof Object ) {
+		// 
+		addToIndex( obj, idIndex, constructors );
 
-		if ( obj.constructor.name != 'Object' ) {
+		let flat: any = {};
+		if ( obj instanceof Array ) flat = [];
+
+		if ( '__id__' in obj ) {
+			flat['__id__'] = obj['__id__'];
+			obj['__written__'] = true;
+		}
+
+		if ( obj.constructor.name != 'Object' && obj.constructor.name != 'Array' ) {
 			flat['__class__'] = obj.constructor.name;
 		}
 
 		for ( let varname in obj ) {
-			flat[varname] = toJSON( obj[varname], constructors );			
+			if ( varname == '__written__') continue;
+
+			flat[varname] = toJSON( obj[varname], constructors, idIndex, trail.concat( varname ) );			
 		}
 
 		return flat;
@@ -48,26 +198,48 @@ export function toJSON( obj: any, constructors: { [key: string]: any }, toplevel
 	}
 }
 
-export function toJSONPointer( obj: any ): any {
+export function toJSONPointer( obj: any, idIndex: Array<any> ): any {
 	if ( obj === null || obj === undefined ) {
 		return null;
 
-	} else if ( !('id' in obj) || obj.id < 0 ) {
-		throw 'toJSONPointer: cannot make pointer of object ' + obj;
-
-	} else {
-		let classname: string = '';
-		if ( obj.constructor ) classname = obj.constructor.name;
-
-		return { "__pointer__": obj.id, "__class__": classname };
+	// some functions force pointers, so need to add index objects here
+	} else if ( !( '__id__' in obj ) ) {
+		idIndex.push( obj );
+		obj['__id__'] = idIndex.length - 1;
+		obj['__written__'] = false;
 	}
+
+	let classname: string = '';
+	if ( obj.constructor ) classname = obj.constructor.name;
+
+	return { "__pointer__": obj['__id__'], "__class__": classname };
 }
 
 export function checkSchema( obj: any, schemaName: string ): boolean {
 	return true;
 }
 
-export function fromJSON( json: any, constructors: { [key: string]: any } ) {
+function indexOnRead( json: any, obj: any, idIndex: Array<any> ) {
+	// add to id index
+	if ( '__id__' in json ) {
+		if ( json['__id__'] in idIndex ) {
+			throw 'indexOnRead: __id__ collision at ' + json['__id__'];
+		}
+
+		idIndex[json['__id__']] = obj;
+	}	
+}
+
+export function fromJSON( json: any, 
+						  constructors: { [key: string]: any }, 
+						  idIndex: Array<any>, 
+						  trail: Array<any> )
+{
+	printTrail( trail, json, true )
+
+	if ( trail.length > 20 ) {
+		throw 'Maximum recursion depth exceeded';
+	}
 
 	if ( json === null || json === undefined ) {
 		return null;
@@ -76,8 +248,12 @@ export function fromJSON( json: any, constructors: { [key: string]: any } ) {
 		let arr: Array<any> = [];
 
 		for ( let i in json ) {
-			arr[i] = fromJSON( json[i], constructors );
+			if ( i != '__id__' ) {
+				arr[i] = fromJSON( json[i], constructors, idIndex, trail.concat( i + '' ) );
+			}
 		}
+
+		indexOnRead( json, arr, idIndex );
 
 		return arr;
 
@@ -101,8 +277,12 @@ export function fromJSON( json: any, constructors: { [key: string]: any } ) {
 
 		// add class members
 		for ( let varname in json ) {
-			obj[varname] = fromJSON( json[varname], constructors );
+			if ( varname != '__id__' ) {
+				obj[varname] = fromJSON( json[varname], constructors, idIndex, trail.concat( varname + '' ) );
+			}
 		}
+
+		indexOnRead( json, obj, idIndex );
 
 		return obj;
 
@@ -119,16 +299,10 @@ export function resolvePointersIn( obj: any, idIndex: Array<any>, toplevel: bool
 			if ( obj[i] instanceof Object ) {
 				if ( '__pointer__' in obj[i] ) {
 					obj[i] = resolvePointer( obj[i]['__pointer__'], idIndex );
+
 				} else {
-
-					// only check indexed objects in top level
-					if ( ('id' in obj[i] && toplevel) || !('id' in obj[i]) ) {
-						resolvePointersIn( obj[i], idIndex );
-					}
+					resolvePointersIn( obj[i], idIndex );
 				}
-
-			} else {
-				resolvePointersIn( obj[i], idIndex );
 			}
 		}
 
@@ -143,16 +317,10 @@ export function resolvePointersIn( obj: any, idIndex: Array<any>, toplevel: bool
 			if ( obj[i] instanceof Object ) {
 				if ( '__pointer__' in obj[i] ) {
 					obj[i] = resolvePointer( obj[i]['__pointer__'], idIndex );
+				
 				} else {
-
-					// only check indexed objects in top level
-					if ( ('id' in obj[i] && toplevel) || !('id' in obj[i]) ) {
-						resolvePointersIn( obj[i], idIndex );
-					}
+					resolvePointersIn( obj[i], idIndex );
 				}
-
-			} else {
-				resolvePointersIn( obj[i], idIndex );
 			}
 		}
 
@@ -167,10 +335,77 @@ export function resolvePointersIn( obj: any, idIndex: Array<any>, toplevel: bool
 }
 
 function resolvePointer( index: number, idIndex: Array<any> ): any {
-	if ( !(index in idIndex) ) {
+	if ( !( index in idIndex ) ) {
 		console.log( idIndex );
 		throw 'resolvePointer: no pointer with id ' + index;
 	}
 	
 	return idIndex[index];
+}
+
+export function checkStructure( obj1: any, obj2: any, trail: Array<any>, trail2: Array<any> ): boolean {
+	if ( trail.indexOf( obj1 ) >= 0 ) {
+		return true;
+	}
+
+	let result: boolean = true;
+
+	for ( let i in obj1 ) {
+
+		// missing key
+		if ( !( i in obj2 ) ) {
+			let str = '';
+			for ( let varname of trail2 ) {
+				str += '.' + varname;
+			}				
+			console.log( str + '.' + i + ' missing from obj2' );
+			return false;		
+		}
+
+		if ( obj1[i] instanceof Object ) {
+			let type1 = obj1[i].constructor.name;
+			let type2 = obj2[i].constructor.name;
+
+			// mismatched types
+			if ( type1 != type2 ) {
+				let str = '';
+				for ( let varname of trail2 ) {
+					str += '.' + varname;
+				}
+				console.log( str + '.' + i + ' type: ' + type1 + ' != ' + type2 );
+				return false;
+			}
+
+			result = result && checkStructure( obj1[i], obj2[i], trail.concat( obj1 ), trail2.concat( i ) );
+			
+		} else {
+			if ( obj1[i] === obj2[i] ) {
+				continue;
+			} else {
+
+				// mismatched values
+				let str = '';
+				for ( let varname of trail2 ) {
+					str += '.' + varname;
+				}				
+				console.log( str + '.' + i + ': ' + obj1[i] + ' != ' + obj2[i] );
+				return false;
+			}
+		}
+	}
+
+	for ( let i in obj2 ) {
+
+		// missing key
+		if ( !( i in obj1 ) ) {
+			let str = '';
+			for ( let varname of trail2 ) {
+				str += '.' + varname;
+			}				
+			console.log( str + '.' + i + ' missing from obj1' );			
+			return false;
+		}	
+	}
+
+	return result;
 }
