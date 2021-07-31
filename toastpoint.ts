@@ -4,7 +4,11 @@ export function listToJSON( list: Array<any>, constructors: { [key: string]: any
 
 	try {
 		for ( let i in list ) {
-			output[i] = toJSON( list[i], constructors, idIndex, [] );
+			addToIndex( list[i], idIndex, constructors );
+		}
+
+		for ( let i in list ) {
+			output[i] = toJSON( list[i], constructors, idIndex, [], true );
 		}
 
 	} catch( error ) {
@@ -35,7 +39,7 @@ function shouldBePointer( obj: any,
 					      constructors: { [key: string]: any } ): boolean
 {
 	if ( obj instanceof Object && '__id__' in obj ) {
-		if ( obj['__id__'] in idIndex && obj['__written__'] ) {
+		if ( obj['__id__'] in idIndex ) {
 			return true;
 		}
 	}
@@ -45,8 +49,8 @@ function shouldBePointer( obj: any,
 }
 
 function addToIndex( obj: any, 
-					 idIndex: Array<any>, 
-					 constructors: { [key: string]: any } ): boolean
+					 		idIndex: Array<any>, 
+					 		constructors: { [key: string]: any } ): boolean
 {
 	if ( obj instanceof Object ) {
 		if ( obj.constructor.name != 'Object' && obj.constructor.name != 'Array' &&
@@ -118,7 +122,8 @@ function printTrail( trail: Array<any>, obj: any, reading: boolean=false ) {
 export function toJSON( obj: any, 				
 						constructors: { [key: string]: any },
 						idIndex: Array<any>,
-						trail: Array<any> ): any 
+						trail: Array<any>,
+						toplevel: boolean=false ): any 
 {
 	printTrail( trail, obj );
 
@@ -129,7 +134,7 @@ export function toJSON( obj: any,
 	if ( obj === null || obj === undefined ) {
 		return obj;
 
-	} else if ( shouldBePointer( obj, idIndex, constructors ) ) {
+	} else if ( !toplevel && shouldBePointer( obj, idIndex, constructors ) ) {
 		return toJSONPointer( obj, idIndex );
 
 	} else if ( obj.toJSON ) {
@@ -138,7 +143,7 @@ export function toJSON( obj: any,
 			obj['__written__'] = true;
 		}
 
-		let output = obj.toJSON( constructors, idIndex );
+		let output = obj.toJSON( constructors, idIndex, trail );
 		if ( '__id__' in obj ) {
 			output['__id__'] = obj['__id__'];
 		}
@@ -173,7 +178,10 @@ export function toJSON( obj: any,
 		addToIndex( obj, idIndex, constructors );
 
 		let flat: any = {};
-		if ( obj instanceof Array ) flat = [];
+
+		if ( obj instanceof Array ) {
+			flat['__array__'] = [];
+		}
 
 		if ( '__id__' in obj ) {
 			flat['__id__'] = obj['__id__'];
@@ -184,10 +192,13 @@ export function toJSON( obj: any,
 			flat['__class__'] = obj.constructor.name;
 		}
 
+		let target = flat;
+		if ( obj instanceof Array ) target = flat['__array__'];
+
 		for ( let varname in obj ) {
 			if ( varname == '__written__') continue;
 
-			flat[varname] = toJSON( obj[varname], constructors, idIndex, trail.concat( varname ) );			
+			target[varname] = toJSON( obj[varname], constructors, idIndex, trail.concat( varname ) );			
 		}
 
 		return flat;
@@ -232,8 +243,15 @@ function indexOnRead( json: any, obj: any, idIndex: Array<any> ) {
 
 export function fromJSON( json: any, 
 						  constructors: { [key: string]: any }, 
-						  idIndex: Array<any>, 
-						  trail: Array<any> )
+						  idIndex: Array<any> )
+{
+	return fromJSONRecur( json, constructors, idIndex, [] );
+}
+
+function fromJSONRecur( json: any, 
+						constructors: { [key: string]: any }, 
+						idIndex: Array<any>, 
+						trail: Array<any> )
 {
 	printTrail( trail, json, true )
 
@@ -244,12 +262,12 @@ export function fromJSON( json: any,
 	if ( json === null || json === undefined ) {
 		return null;
 
-	} else if ( json instanceof Array ) {
+	}/* else if ( json instanceof Array ) {
 		let arr: Array<any> = [];
 
 		for ( let i in json ) {
 			if ( i != '__id__' ) {
-				arr[i] = fromJSON( json[i], constructors, idIndex, trail.concat( i + '' ) );
+				arr[i] = fromJSONRecur( json[i], constructors, idIndex, trail.concat( i + '' ) );
 			}
 		}
 
@@ -257,7 +275,7 @@ export function fromJSON( json: any,
 
 		return arr;
 
-	} else if ( json instanceof Object ) {
+	}*/ else if ( json instanceof Object ) {
 		if ( '__pointer__' in json ) {
 			return json;
 		}
@@ -273,12 +291,16 @@ export function fromJSON( json: any,
 			}		
 
 			obj = new constructors[type]();
+
+		} else if ( '__array__' in json ) {
+			json = json['__array__'];
+			obj = [];
 		}
 
 		// add class members
 		for ( let varname in json ) {
 			if ( varname != '__id__' ) {
-				obj[varname] = fromJSON( json[varname], constructors, idIndex, trail.concat( varname + '' ) );
+				obj[varname] = fromJSONRecur( json[varname], constructors, idIndex, trail.concat( varname + '' ) );
 			}
 		}
 
