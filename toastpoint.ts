@@ -1,27 +1,46 @@
-export function listToJSON( list: Array<any>, constructors: { [key: string]: any } ): any {
-	let output: Array<any> = [];
-	let idIndex: Array<any> = [];
+export let config: { [key: string]: any } = {
+	PRINT: false,
+}
 
-	try {
-		for ( let i in list ) {
-			addToIndex( list[i], idIndex, constructors );
-		}
+export let log: { [key: string]: any } = {
+	TRAIL: '',
+}
 
-		for ( let i in list ) {
-			output[i] = toJSON( list[i], constructors, idIndex, [], true );
-		}
+class TrailEntry {
+	obj: any;
+	varname: string | number;
 
-	} catch( error ) {
-		console.log( error );
+	constructor( obj: any, varname: string | number ) {
+		this.obj = obj;
+		this.varname = varname;
+	}
+}
 
-	} finally {
-		for ( let i = 0; i < idIndex.length; i++ ) {
-			if ( !( i in idIndex ) ) {
+export class Toaster {
+	constructors: { [key: string]: any } = {};
+	idIndex: Array<any> = [];
+	trail: Array<TrailEntry> = [];
+
+	constructor( c: { [key: string]: any } ) {
+		this.constructors = c;
+	}
+
+	copy( entry: TrailEntry ): Toaster {
+		let toaster = new Toaster( this.constructors )
+		toaster.idIndex = this.idIndex;
+		toaster.trail = this.trail.concat( entry );
+
+		return toaster;
+	}
+
+	cleanIdIndex() {
+		for ( let i = 0; i < this.idIndex.length; i++ ) {
+			if ( !( i in this.idIndex ) ) {
 				console.log( 'listToJSON: missing __id__ ' + i );
 			}
 		}
 
-		for ( let obj of idIndex ) {
+		for ( let obj of this.idIndex ) {
 			if ( !( '__id__' in obj ) ) {
 				throw 'listToJSON: object lacks __id__';
 			}
@@ -30,16 +49,37 @@ export function listToJSON( list: Array<any>, constructors: { [key: string]: any
 			delete obj['__written__'];
 		}
 	}
+}
+
+export function listToJSON( list: Array<any>, constructors: { [key: string]: any } ): any {
+	let output: Array<any> = [];
+
+	log.TRAIL = '';
+	let toaster = new Toaster( constructors );
+
+	try {
+		for ( let i = 0; i < list.length; i++ ) {
+			addToIndex( list[i], toaster, true );
+		}
+
+		for ( let i = 0; i < list.length; i++ ) {
+			output[i] = toJSON( list[i], toaster.copy( new TrailEntry( list[i], i ) ), true );
+		}
+
+	} catch( error ) {
+		throw error;
+
+	} finally {
+		toaster.cleanIdIndex();
+	}
 
 	return output;
 }
 
-function shouldBePointer( obj: any, 
-					      idIndex: Array<any>, 
-					      constructors: { [key: string]: any } ): boolean
-{
+function shouldBePointer( obj: any, toaster: Toaster ) {
+	
 	if ( obj instanceof Object && '__id__' in obj ) {
-		if ( obj['__id__'] in idIndex ) {
+		if ( obj['__id__'] in toaster.idIndex && obj['__written__'] ) {
 			return true;
 		}
 	}
@@ -48,24 +88,24 @@ function shouldBePointer( obj: any,
 	return false;
 }
 
-function addToIndex( obj: any, 
-					 		idIndex: Array<any>, 
-					 		constructors: { [key: string]: any } ): boolean
-{
+function addToIndex( obj: any, toaster: Toaster, prewritten: boolean=false ): boolean {
 	if ( obj instanceof Object ) {
-		if ( obj.constructor.name != 'Object' && obj.constructor.name != 'Array' &&
-		     !( obj.constructor.name in constructors ) ) {
-			throw 'missing constructor for ' + obj.constructor.name;
+		let name = obj.constructor.name;
+
+		if ( name != 'Object' && name != 'Array' &&
+		     !( name in toaster.constructors ) ) {
+			throw 'missing constructor for ' + name;
 		}
 
 		if ( !( '__id__' in obj ) ) {
-			idIndex.push( obj );
-			obj['__id__'] = idIndex.length - 1;
-			obj['__written__'] = false;
+			toaster.idIndex.push( obj );
+			obj['__id__'] = toaster.idIndex.length - 1;
+			obj['__written__'] = prewritten;
+
 			return true;
 
 		} else {
-			if ( idIndex[obj['__id__']] != obj ) {
+			if ( toaster.idIndex[obj['__id__']] != obj ) {
 				throw 'addToIndex: __id__ collision at ' + obj['__id__'];
 			}
 		}
@@ -74,7 +114,11 @@ function addToIndex( obj: any,
 	return false;
 }
 
-function printTrail( trail: Array<any>, obj: any, reading: boolean=false ) {
+function printVar( trail: Array<TrailEntry>, reading: boolean=false ) {
+	if ( trail.length < 1 ) {
+		return;
+	}
+
 	let str = '';
 
 	// pad out for depth
@@ -84,8 +128,10 @@ function printTrail( trail: Array<any>, obj: any, reading: boolean=false ) {
 
 	// variable name or array index
 	if ( trail.length > 0 ) {
-		str += trail[trail.length - 1] + ' ';		
+		str += trail[trail.length - 1].varname + ' ';		
 	}
+
+	let obj = trail[trail.length - 1].obj;
 
 	// object type and value
 	let type = typeof( obj );
@@ -104,7 +150,7 @@ function printTrail( trail: Array<any>, obj: any, reading: boolean=false ) {
 		}
 	}
 
-	str += type;
+	str += '(' + type + ')';
 
 	// pointers
 	if ( typeof( obj ) == 'object' && obj ) {
@@ -116,66 +162,77 @@ function printTrail( trail: Array<any>, obj: any, reading: boolean=false ) {
 		}
 	}
 
-	console.log( str );
+	if ( config.PRINT ) console.log( str );
+	log.TRAIL += str + '\n';
 }
 
-export function toJSON( obj: any, 				
-						constructors: { [key: string]: any },
-						idIndex: Array<any>,
-						trail: Array<any>,
-						toplevel: boolean=false ): any 
-{
-	printTrail( trail, obj );
+function printTrail( trail: Array<TrailEntry>, reading: boolean=false, loopIndex: number=-1 ) {
+	for ( let i = 0; i < trail.length; i++ ) {
+		let entry = trail[i];
+		let str = '';
 
-	if ( trail.length > 20 ) {
+		if ( typeof( entry.varname ) == 'string' ) {
+			str += '.' + entry.varname;
+		} else if ( typeof( entry.varname ) == 'number' ) {
+			str += '[' + entry.varname + ']';
+		}
+		
+		let id = '';
+
+		if ( entry.obj instanceof Object ) {
+			if ( '__id__' in entry.obj ) {
+				id = ' ' + entry.obj['__id__'];
+			}
+
+			if ( reading ) {
+				str += ' (' + entry.obj['__class__'] + id + ')';
+			} else {
+				str += ' (' + entry.obj.constructor.name + id + ')';
+			}
+		} else {
+			str += ' literal';
+		}
+
+		if ( i == loopIndex ) str += ' <-';
+		if ( i == trail.length - 1 ) str += ' ->'
+
+		console.log( str );
+	}
+}
+
+export function toJSON( obj: any, toaster: Toaster, toplevel: boolean=false ): any {
+	printVar( toaster.trail );
+
+	if ( toaster.trail.length > 20 ) {
+		printTrail( toaster.trail );
 		throw 'Maximum recursion depth exceeded';
 	}
 
 	if ( obj === null || obj === undefined ) {
 		return obj;
 
-	} else if ( !toplevel && shouldBePointer( obj, idIndex, constructors ) ) {
-		return toJSONPointer( obj, idIndex );
+	// objects from classes in 'constructors'
+	} else if ( !toplevel && shouldBePointer( obj, toaster ) ) {
+		return toJSONPointer( obj, toaster );
 
 	} else if ( obj.toJSON ) {
-		addToIndex( obj, idIndex, constructors );
-		if ( '__id__' in obj ) {
-			obj['__written__'] = true;
+		addToIndex( obj, toaster );
+
+		let output = obj.toJSON( toaster, toaster.trail );
+		if ( !output ) {
+			throw 'toJSON(): Bad conversion from ' + obj.constructor.name;
 		}
 
-		let output = obj.toJSON( constructors, idIndex, trail );
 		if ( '__id__' in obj ) {
 			output['__id__'] = obj['__id__'];
+			output['__class__'] = obj.constructor.name;
+			obj['__written__'] = true;
 		}
 
 		return output;
 
-	}/* else if ( obj instanceof Array ) {
-
-		// add array to object index
-		addToIndex( obj, idIndex, constructors );
-
-		if ( '__id__' in obj as any ) {
-			(obj as any)['__written__'] = true;
-		}
-
-		// convert array members to JSON
-		let arr: Array<any> = [];
-
-		for ( let i in obj ) {
-			if ( i == '__written__') continue;
-
-			arr[i] = toJSON( obj[i], constructors, idIndex, trail.concat( i + '' ) );
-		}
-
-		// insert id
-		(arr as any)['__id__'] = (obj as any)['__id__'];
-
-		return arr;
-
-	}*/ else if ( obj instanceof Object ) {
-		// 
-		addToIndex( obj, idIndex, constructors );
+	} else if ( obj instanceof Object ) {
+		addToIndex( obj, toaster );
 
 		let flat: any = {};
 
@@ -198,7 +255,8 @@ export function toJSON( obj: any,
 		for ( let varname in obj ) {
 			if ( varname == '__written__') continue;
 
-			target[varname] = toJSON( obj[varname], constructors, idIndex, trail.concat( varname ) );			
+			target[varname] = toJSON( obj[varname], 
+									  toaster.copy( new TrailEntry( obj[varname], varname ) ) );			
 		}
 
 		return flat;
@@ -209,14 +267,14 @@ export function toJSON( obj: any,
 	}
 }
 
-export function toJSONPointer( obj: any, idIndex: Array<any> ): any {
+export function toJSONPointer( obj: any, toaster: Toaster ): any {
 	if ( obj === null || obj === undefined ) {
 		return null;
 
 	// some functions force pointers, so need to add index objects here
 	} else if ( !( '__id__' in obj ) ) {
-		idIndex.push( obj );
-		obj['__id__'] = idIndex.length - 1;
+		toaster.idIndex.push( obj );
+		obj['__id__'] = toaster.idIndex.length - 1;
 		obj['__written__'] = false;
 	}
 
@@ -230,81 +288,69 @@ export function checkSchema( obj: any, schemaName: string ): boolean {
 	return true;
 }
 
-function indexOnRead( json: any, obj: any, idIndex: Array<any> ) {
+function indexOnRead( json: any, obj: any, toaster: Toaster ) {
 	// add to id index
 	if ( '__id__' in json ) {
-		if ( json['__id__'] in idIndex ) {
-			throw 'indexOnRead: __id__ collision at ' + json['__id__'];
+		if ( json['__id__'] in toaster.idIndex ) {
+			throw 'indexOnRead(): __id__ collision at ' + json['__id__'];
 		}
 
-		idIndex[json['__id__']] = obj;
+		toaster.idIndex[json['__id__']] = obj;
 	}	
 }
 
-export function fromJSON( json: any, 
-						  constructors: { [key: string]: any }, 
-						  idIndex: Array<any> )
-{
-	return fromJSONRecur( json, constructors, idIndex, [] );
+export function fromJSON( json: any, toaster: Toaster ) {
+	log.TRAIL = '';
+
+	return fromJSONRecur( json, toaster );
 }
 
-function fromJSONRecur( json: any, 
-						constructors: { [key: string]: any }, 
-						idIndex: Array<any>, 
-						trail: Array<any> )
-{
-	printTrail( trail, json, true )
+function fromJSONRecur( json: any, toaster: Toaster ) {
+	printVar( toaster.trail, true )
 
-	if ( trail.length > 20 ) {
+	if ( toaster.trail.length > 20 ) {
+		printTrail( toaster.trail, true );
 		throw 'Maximum recursion depth exceeded';
 	}
 
 	if ( json === null || json === undefined ) {
 		return null;
 
-	}/* else if ( json instanceof Array ) {
-		let arr: Array<any> = [];
-
-		for ( let i in json ) {
-			if ( i != '__id__' ) {
-				arr[i] = fromJSONRecur( json[i], constructors, idIndex, trail.concat( i + '' ) );
-			}
-		}
-
-		indexOnRead( json, arr, idIndex );
-
-		return arr;
-
-	}*/ else if ( json instanceof Object ) {
+	} else if ( json instanceof Object ) {
 		if ( '__pointer__' in json ) {
 			return json;
 		}
 
 		let obj: any = {};
 
-		// create empty object (classes need to have constructors that take no args)
+		// create empty object with factory function
 		if ( '__class__' in json ) {
 			let type = json['__class__'];
 
-			if ( !( type in constructors ) ) {
+			if ( !( type in toaster.constructors ) ) {
 				throw 'fromJSON: unhandled class ' + type;
 			}		
 
-			obj = new constructors[type]();
+			obj = toaster.constructors[type](); // <-- object created here
 
 		} else if ( '__array__' in json ) {
-			json = json['__array__'];
 			obj = [];
 		}
 
 		// add class members
-		for ( let varname in json ) {
+		let target = json;
+		if ( obj instanceof Array ) {
+			target = json['__array__'];
+		}
+
+		for ( let varname in target ) {
 			if ( varname != '__id__' ) {
-				obj[varname] = fromJSONRecur( json[varname], constructors, idIndex, trail.concat( varname + '' ) );
+				obj[varname] = fromJSONRecur( target[varname], 
+											  toaster.copy( new TrailEntry( target[varname], varname ) ) );
 			}
 		}
 
-		indexOnRead( json, obj, idIndex );
+		indexOnRead( json, obj, toaster );
 
 		return obj;
 
@@ -313,17 +359,39 @@ function fromJSONRecur( json: any,
 	}
 }
 
-export function resolvePointersIn( obj: any, idIndex: Array<any>, toplevel: boolean=false ) {
+export function resolveList( list: Array<any>, toaster: Toaster ) {
+	log.TRAIL = '';
+
+	for ( let i = 0; i < list.length; i++ ) {
+		resolvePointersIn( list[i], toaster.copy( new TrailEntry( list[i], i ) ) );
+	}
+}
+
+function resolvePointersIn( obj: any, toaster: Toaster ) {
+	if ( typeof( HTMLElement ) === 'function' && obj instanceof HTMLElement ) {
+		return;
+	}
+
+	printVar( toaster.trail );
+
+	let index = toaster.trail.findIndex( ( x ) => x.obj == obj );
+
+	if ( index >= 0 && index < toaster.trail.length - 1 ) {
+		printTrail( toaster.trail, false, index );
+
+		throw 'resolvePointersIn: Loop detected';
+	}
+
 	if ( obj instanceof Array ) {
-		for ( let i in obj ) {
+		for ( let i = 0; i < obj.length; i++ ) {
 
 			// resolve pointer
 			if ( obj[i] instanceof Object ) {
 				if ( '__pointer__' in obj[i] ) {
-					obj[i] = resolvePointer( obj[i]['__pointer__'], idIndex );
+					obj[i] = resolvePointer( obj[i]['__pointer__'], toaster );
 
 				} else {
-					resolvePointersIn( obj[i], idIndex );
+					resolvePointersIn( obj[i], toaster.copy( new TrailEntry( obj[i], i ) ) );
 				}
 			}
 		}
@@ -338,31 +406,26 @@ export function resolvePointersIn( obj: any, idIndex: Array<any>, toplevel: bool
 			// resolve pointer
 			if ( obj[i] instanceof Object ) {
 				if ( '__pointer__' in obj[i] ) {
-					obj[i] = resolvePointer( obj[i]['__pointer__'], idIndex );
+					obj[i] = resolvePointer( obj[i]['__pointer__'], toaster );
 				
 				} else {
-					resolvePointersIn( obj[i], idIndex );
+					resolvePointersIn( obj[i], toaster.copy( new TrailEntry( obj[i], i ) ) );
 				}
 			}
 		}
 
-		// run init method after all pointers in object have been resolved
-		if ( obj.init ) {
-			obj.init();
-		}
-
 	} else {
-		return
+		return;
 	}
 }
 
-function resolvePointer( index: number, idIndex: Array<any> ): any {
-	if ( !( index in idIndex ) ) {
-		console.log( idIndex );
+function resolvePointer( index: number, toaster: Toaster ): any {
+	if ( !( index in toaster.idIndex ) ) {
+		console.log( toaster.idIndex );
 		throw 'resolvePointer: no pointer with id ' + index;
 	}
 	
-	return idIndex[index];
+	return toaster.idIndex[index];
 }
 
 export function checkStructure( obj1: any, obj2: any, trail: Array<any>, trail2: Array<any> ): boolean {
@@ -384,6 +447,7 @@ export function checkStructure( obj1: any, obj2: any, trail: Array<any>, trail2:
 			return false;		
 		}
 
+		// object, might have to recur
 		if ( obj1[i] instanceof Object ) {
 			let type1 = obj1[i].constructor.name;
 			let type2 = obj2[i].constructor.name;
@@ -400,6 +464,7 @@ export function checkStructure( obj1: any, obj2: any, trail: Array<any>, trail2:
 
 			result = result && checkStructure( obj1[i], obj2[i], trail.concat( obj1 ), trail2.concat( i ) );
 			
+		// a literal
 		} else {
 			if ( obj1[i] === obj2[i] ) {
 				continue;
@@ -416,9 +481,9 @@ export function checkStructure( obj1: any, obj2: any, trail: Array<any>, trail2:
 		}
 	}
 
+	// look through obj2 for keys that are not in obj1
 	for ( let i in obj2 ) {
 
-		// missing key
 		if ( !( i in obj1 ) ) {
 			let str = '';
 			for ( let varname of trail2 ) {
