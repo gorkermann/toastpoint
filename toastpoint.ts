@@ -55,7 +55,10 @@ type FactoryFunc = () => Object;
 export class Toaster {
 	 // list of functions used to instantiate classes
 	constructors: Dict<FactoryFunc> = {};
-	nameMap: Dict<string> = {}; // mapping of class names if code is obfuscated
+
+	// mapping of class names to try and translate obfuscated code
+	// can be left empty or incomplete, 
+	nameMap: Dict<string> = {};
 
 	addrIndex: Array<any> = []; // record of objects seen, array index is obj.__id__
 	
@@ -66,7 +69,9 @@ export class Toaster {
 	outputList: Array<any> = []; // list of objects created (easier to traverse than a tree)
 	trail: Array<TrailEntry> = []; // record of where we are in the object tree
 
-	constructor( constructors: Dict<FactoryFunc>, nameMap: Dict<string> ) {
+	constructor( constructors: Dict<FactoryFunc>, nameMap?: Dict<string> ) {
+		if ( nameMap === undefined ) nameMap = {};
+
 		this.constructors = constructors;
 		this.nameMap = nameMap;
 	}
@@ -112,6 +117,9 @@ export class Toaster {
 			return name;
 		} else if ( name in this.nameMap ) {
 			return this.nameMap[name];
+		} else if ( Object.keys( this.nameMap ).length == 0 && 
+					name in this.constructors ) {
+			return name;
 		} else {
 			return null;
 		}
@@ -120,7 +128,9 @@ export class Toaster {
 
 export function singleToJSON( obj: any,
 							  constructors: Dict<FactoryFunc>,
-							  nameMap: Dict<string> ): any {
+							  nameMap?: Dict<string> ): any {
+	if ( nameMap === undefined ) nameMap = {};
+
 	let list = listToJSON( [obj], constructors, nameMap );
 
 	return list[0];
@@ -128,7 +138,9 @@ export function singleToJSON( obj: any,
 
 export function listToJSON( list: Array<any>, 
 							constructors: Dict<FactoryFunc>,
-							nameMap: Dict<string> ): any {
+							nameMap?: Dict<string> ): any {
+	if ( nameMap === undefined ) nameMap = {};
+
 	let output: Array<any> = [];
 
 	log.TRAIL = '';
@@ -361,6 +373,16 @@ export function setMultiJSON( target: any,
 	}
 }
 
+/**
+ * set a field of some object to a JSONified object
+ * target.varname = JSONify(obj)
+ * 
+ * @param {any}           target   object on which to set the field
+ * @param {string|number} varname  variable name for the field
+ * @param {any}           obj      object to JSONify
+ * @param {Toaster}       toaster
+ * @param {boolean=false} toplevel
+ */
 export function setJSON( target: any, 
 						 varname: string | number, 
 						 obj: any, 
@@ -477,7 +499,13 @@ export function checkSchema( obj: any, schemaName: string ): boolean {
 	return true;
 }
 
-
+/**
+ * adds an object's __id__ to a toaster's addrIndex
+ * 
+ * @param {any}     json    json object
+ * @param {any}     obj     js object based on json object 
+ * @param {Toaster} toaster
+ */
 function indexOnRead( json: any, obj: any, toaster: Toaster ) {
 	// add to id index
 	if ( '__id__' in json ) {
@@ -521,13 +549,13 @@ function fromJSONRecur( json: any, toaster: Toaster ) {
 
 		// create empty object with factory function
 		if ( '__class__' in json ) {
-			let type = json['__class__'];
+			let className = json['__class__'];
 
-			if ( !( type in toaster.constructors ) ) {
-				throw new Error( 'fromJSON: unhandled class ' + type );
+			if ( !( className in toaster.constructors ) ) {
+				throw new Error( 'fromJSON: unhandled class ' + className );
 			}		
 
-			obj = toaster.constructors[type](); // <-- object created here
+			obj = toaster.constructors[className](); // <-- object created here
 
 		} else if ( json instanceof Array || '__array__' in json ) {
 			obj = [];

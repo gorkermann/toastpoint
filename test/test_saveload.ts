@@ -1,4 +1,5 @@
-import { TestFuncs, TestRun, Test } from '../lib/TestRun.js'
+import { TestFuncs, Test, Result, TestReport, 
+		 runTestsAsync } from '../lib/TestRun.js'
 import * as tp from '../toastpoint.js'
 
 import fs from 'fs'
@@ -11,15 +12,40 @@ class A {
 	constructor() {}
 }
 
+class Loop {
+	other: Loop = null;
+
+	constructor( other: Loop ) {
+		this.other = other;
+	}
+}
+
 class B {
 	a: A = null;
 	b: B = null;
 	x: string = '';
+	l1: Loop;
+	l2: Loop;
 
 	constructor() {
 		this.a = null;
 		this.b = this;
 		this.x = Math.random().toFixed( 3 );
+
+		// create a pointer loop that should be avoided by the loader
+		this.l1 = new Loop( null );
+		this.l2 = new Loop( this.l1 );
+		this.l1.other = this.l2;
+	}
+
+	toJSON( toaster: tp.Toaster ): any {
+		let flat: any = {};
+
+		tp.setJSON( flat, 'a', this.a, toaster );
+		tp.setJSON( flat, 'b', this.b, toaster );
+		tp.setJSON( flat, 'x', this.x, toaster );
+
+		return flat;
 	}
 }
 
@@ -30,6 +56,14 @@ class C extends B {
 		super();
 		this.y = Math.floor( Math.random() * 10 );
 	}
+
+	toJSON( toaster: tp.Toaster ): any {
+		let flat: any = super.toJSON( toaster );
+
+		tp.setJSON( flat, 'y', this.y, toaster );
+		
+		return flat;
+	}	
 }
 
 let a1 = new A();
@@ -46,12 +80,14 @@ b1.b = b1;
 c1.a = null;
 c1.b = b2;
 
-let obj = [ null, false, 0, '',
-			1, 'a',
-			[], {},
-			[1, 'b', 3],
-			{ x: 'a', y: 2, z: 'c' },
-		    a1, b1, b2, c1 ];
+let list_basic = 
+	[null, false, 0, '', 1, 'a',
+	 [], {},
+	 [1, 'b', 3]];
+
+let list_obj = 
+	[{ x: 'a', y: 2, z: 'c' },
+  	 a1, b1, b2, c1 ];
 
 /*
 function test_checkstructure() {
@@ -92,36 +128,57 @@ function test_checkstructure() {
 	ASSERT( tp.checkStructure( a1, a2, [], [] ) );	
 }*/
 
-function test_saveload( tf: TestFuncs ) {
-	let constructors = { 'A': A, 'B': B, 'C': C };
+let factory = function( newable: any ): () => any {
+	return () => {
+		let obj = new newable();
+		return obj;
+	}
+}
 
+let constructors = { 'A': factory( A ), 
+				  	 'B': factory( B ),
+					 'C': factory( C ) };
+
+function saveload( obj: any ): boolean {
 	let json = tp.listToJSON( obj, constructors );
 	let before = tp.log.TRAIL;
 
-	let idIndex: Array<any> = [];
-	let obj2 = tp.fromJSON( json, constructors, idIndex );
-	let after = tp.log.TRAIL;
+	let toaster = new tp.Toaster( constructors )
+	let obj2 = tp.fromJSON( json, toaster );
 
-	tp.resolveList( [obj2], constructors, idIndex );
+	let after = tp.log.TRAIL;
+	
+	tp.resolveList( [obj2], toaster );
+	let after2 = tp.log.TRAIL;
 
 	let result = tp.checkStructure( obj, obj2, [], [] );
 
 	if ( !result ) {
-		console.log( before + '\n\n' + after );
+		console.log( 'before:\n' + before + '\nafter:\n' + after + '\nafter2:\n' + after2 );
 	}
 
-	tf.ASSERT( result );
-
-	tf.wait( () => {} );
+	return result;
 }
 
-let t = new TestRun( null, [] );
+function test_saveload_basic( tf: TestFuncs ) {
+	tf.ASSERT( saveload( list_basic ) );
+}
 
-t.tests.push( new Test( 'saveload', 
-						test_saveload,
+function test_saveload_obj( tf: TestFuncs ) {
+	tf.ASSERT( saveload( list_obj ) );
+}
+
+let tests: Array<Test> = [];
+
+tests.push( new Test( 'saveload_basic', 
+						test_saveload_basic,
 						[] ) );
 
-t.run();
+tests.push( new Test( 'saveload_obj', 
+						test_saveload_obj,
+						[] ) );
 
-
-			
+let report = new TestReport();
+runTestsAsync( tests, true, report ).then( function() {
+	report.print();
+} );
