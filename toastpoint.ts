@@ -524,7 +524,13 @@ function indexOnRead( json: any, obj: any, toaster: Toaster ) {
 	}	
 }
 
-export function fromJSON( json: any, toaster: Toaster ): any {
+type FromJSONOptions = {
+	warnExternal?: boolean; // warn user of top-level primtives that are not in the 
+}
+
+export function fromJSON( json: any, toaster: Toaster, options: FromJSONOptions={} ): any {
+	if ( options.warnExternal === undefined ) options.warnExternal = true;
+
 	log.TRAIL = '';
 
 	let obj = fromJSONRecur( json, toaster );
@@ -673,6 +679,51 @@ function resolveField( obj: any, i: string | number, toaster: Toaster ) {
 			// don't make a new Toaster here as the trail was already appended to
 			resolveObject( obj[i], toaster );
 		}
+	}
+}
+
+function idFilter( obj: any, i: string | number, idList: Array<number> ): boolean {
+	return obj && 
+		   obj[i] && 
+		   typeof( obj[i] ) == 'object' && 
+		   typeof( obj[i].id ) == 'number' &&
+		   obj[i].id >= 0 &&
+		   !idList.includes( obj[i].id );
+}
+
+export function pruneList( obj: any, idList: Array<number> ) {
+
+	// ignore null/undefined and non-objects
+	if ( !obj || typeof( obj ) != 'object' ) return;
+
+	if ( obj instanceof Array ) {
+		for ( let i = obj.length - 1; i >= 0; i-- ) {
+			if ( idFilter( obj, i, idList ) ) {
+				obj.splice( i, 1 );
+			} else {
+				pruneList( obj[i], idList );
+			}
+		}
+
+	// does not properly handle dicts of objects (nulls the entry rather than deleting it)
+	} else if ( obj instanceof Object ) {
+		let toRemove: Array<string> = [];
+
+		for ( let i in obj ) {
+			if ( idFilter( obj, i, idList ) ) {
+				//toRemove.push( i );
+				obj[i] = null;
+			} else {
+				pruneList( obj[i], idList );
+			}
+		}
+
+		for ( let varname of toRemove ) {
+			delete obj[varname];
+		}
+
+	} else {
+		return;
 	}
 }
 
