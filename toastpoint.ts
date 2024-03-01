@@ -524,10 +524,14 @@ function indexOnRead( json: any, obj: any, toaster: Toaster ) {
 	}	
 }
 
-export function fromJSON( json: any, toaster: Toaster ) {
+export function fromJSON( json: any, toaster: Toaster ): any {
 	log.TRAIL = '';
 
-	return fromJSONRecur( json, toaster );
+	let obj = fromJSONRecur( json, toaster );
+
+//	resolveObject( obj, toaster );
+
+	return obj;
 }
 
 function fromJSONRecur( json: any, toaster: Toaster ) {
@@ -610,13 +614,12 @@ function resolveObject( obj: any, toaster: Toaster ) {
     //    return;
     //}
 
+	// ignore null/undefined and non-objects
 	if ( !obj || typeof( obj ) != 'object' ) return;
 
-	// for this to occur, resolveList has to be called with a different Toaster
-	// than the one that was used for fromJSON
-	if ( !toaster.getName( obj ) ) {
-		throw new MissingConstructorError( obj.constructor ? obj.constructor.name : obj );
-	}
+	// ignore objects that are not in the constructors dict (created inside of other objects by fromJSON)
+	if ( !toaster.getName( obj ) ) return;
+	
 
 	if ( config.DEBUG ) printFinalVar( toaster.trail, { reading: true } );
 
