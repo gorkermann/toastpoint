@@ -137,7 +137,8 @@ let factory = function( newable: any ): () => any {
 
 let constructors = { 'A': factory( A ), 
 				  	 'B': factory( B ),
-					 'C': factory( C ) };
+					 'C': factory( C ),
+					 'Loop': factory( Loop ) };
 
 function saveload( obj: any ): boolean {
 	let json = tp.listToJSON( obj, constructors );
