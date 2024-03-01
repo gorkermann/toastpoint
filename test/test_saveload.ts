@@ -148,14 +148,11 @@ function saveload( obj: any ): boolean {
 	let obj2 = tp.fromJSON( json, toaster );
 
 	let after = tp.log.TRAIL;
-	
-	tp.resolveList( [obj2], toaster );
-	let after2 = tp.log.TRAIL;
 
 	let result = tp.checkStructure( obj, obj2, [], [] );
 
 	if ( !result ) {
-		console.log( 'before:\n' + before + '\nafter:\n' + after + '\nafter2:\n' + after2 );
+		console.log( 'before:\n' + before + '\nafter:\n' + after );
 	}
 
 	return result;

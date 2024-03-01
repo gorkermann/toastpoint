@@ -529,7 +529,7 @@ export function fromJSON( json: any, toaster: Toaster ): any {
 
 	let obj = fromJSONRecur( json, toaster );
 
-//	resolveObject( obj, toaster );
+	resolveObject( obj, toaster );
 
 	return obj;
 }
@@ -595,14 +595,6 @@ function fromJSONRecur( json: any, toaster: Toaster ) {
 	}
 }
 
-export function resolveList( list: Array<any>, toaster: Toaster ) {
-	log.TRAIL = '';
-
-	for ( let i = 0; i < list.length; i++ ) {
-		resolveObject( list[i], toaster.copy( new TrailEntry( list[i], i ) ) );
-	}
-}
-
 /**
  * replace { __pointer__: addr } JSON objects with real objects
  * 
@@ -610,16 +602,13 @@ export function resolveList( list: Array<any>, toaster: Toaster ) {
  * @param {Toaster}
  */
 function resolveObject( obj: any, toaster: Toaster ) {
-	//if (typeof (HTMLElement) === 'function' && obj instanceof HTMLElement) {
-    //    return;
-    //}
 
 	// ignore null/undefined and non-objects
 	if ( !obj || typeof( obj ) != 'object' ) return;
 
 	// ignore objects that are not in the constructors dict (created inside of other objects by fromJSON)
 	if ( !toaster.getName( obj ) ) return;
-	
+
 
 	if ( config.DEBUG ) printFinalVar( toaster.trail, { reading: true } );
 
