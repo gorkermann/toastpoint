@@ -153,11 +153,13 @@ function saveload( obj: any ): boolean {
 
 	if ( !result ) {
 		console.log( 'before:\n' + before + '\nafter:\n' + after );
+
+		console.log( json );
 	}
 
 	return result;
 }
-
+tp.config.DEBUG = true;
 function test_saveload_basic( tf: TestFuncs ) {
 	tf.ASSERT( saveload( list_basic ) );
 }

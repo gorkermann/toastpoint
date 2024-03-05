@@ -45,6 +45,7 @@ let constructors = { 'A': factory( A ),
 function test_prune( tf: TestFuncs ) {
 	let list = [a1, b2, b3, b4];
 
+	// no id list passed
 	let json = tp.listToJSON( list, constructors );
 
 	let toaster = new tp.Toaster( constructors );
@@ -57,8 +58,9 @@ function test_prune( tf: TestFuncs ) {
 	tf.ASSERT_EQ( regen[0].reg_obj.key, 'value' );
 
 	// pass through pruneList, no pruning occurs
-	let idList = [1, 2, 3];
-	tp.pruneList( regen, idList );
+	json = tp.listToJSON( list, constructors, undefined, [1, 2, 3] );
+	toaster = new tp.Toaster( constructors );
+	regen = tp.fromJSON( json, toaster );
 
 	tf.ASSERT_EQ( regen.length, 4 );
 	tf.ASSERT_EQ( regen.map( x => x.constructor.name ), ['A', 'B', 'B', 'B'] );
@@ -68,9 +70,9 @@ function test_prune( tf: TestFuncs ) {
 	tf.ASSERT_EQ( regen[0].reg_obj.key, 'value' );
 
 	// remove b3
+	json = tp.listToJSON( list, constructors, undefined, [1, 2] );
 	toaster = new tp.Toaster( constructors );
 	regen = tp.fromJSON( json, toaster );
-	tp.pruneList( regen, [1, 2] );
 
 	tf.ASSERT_EQ( regen.length, 3 );
 	tf.ASSERT_EQ( regen.map( x => x.constructor.name ), ['A', 'B', 'B',] );
@@ -79,21 +81,21 @@ function test_prune( tf: TestFuncs ) {
 	tf.ASSERT_EQ( Object.values( regen[0].named_bees ), [regen[1], null, regen[2]] );
 	tf.ASSERT_EQ( regen[0].reg_obj.key, 'value' );
 
-	// remove b2, b3 from a
+	// remove b2, b3
+	json = tp.listToJSON( list, constructors, undefined, [1] );
 	toaster = new tp.Toaster( constructors );
 	regen = tp.fromJSON( json, toaster );
 	let a = regen[0];
-	tp.pruneList( a, [1] );
 
 	tf.ASSERT_EQ( ( a as A ).bees.map( x => x.id ), [-1] );
 	tf.ASSERT_EQ( Object.keys( a.named_bees ), ['twill', 'thread', 'negate'] );
-	tf.ASSERT_EQ( Object.values( a.named_bees ), [null, null, regen[3]] );
+	tf.ASSERT_EQ( Object.values( a.named_bees ), [null, null, regen[1]] );
 	tf.ASSERT_EQ( a.reg_obj.key, 'value' );
 
 	// remove a1
+	json = tp.listToJSON( list, constructors, undefined, [2, 3] );
 	toaster = new tp.Toaster( constructors );
 	regen = tp.fromJSON( json, toaster );
-	tp.pruneList( regen, [2, 3] );
 
 	tf.ASSERT_EQ( regen.length, 3 );
 	tf.ASSERT_EQ( regen.map( x => x.constructor.name ), ['B', 'B', 'B',] );

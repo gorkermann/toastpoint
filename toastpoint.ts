@@ -128,6 +128,9 @@ export class Toaster {
 	 // list of functions used to instantiate classes
 	constructors: Dict<FactoryFunc> = {};
 
+	// object ids to be saved / loaded (ignore if null)
+	allowedIdList: Array<number> | null = null;
+
 	// mapping of class names to try and translate obfuscated code
 	// can be left empty or incomplete, 
 	nameMap: Dict<string> = {};
@@ -152,6 +155,7 @@ export class Toaster {
 
 	copy( entry: TrailEntry ): Toaster {
 		let toaster = new Toaster( this.constructors, this.nameMap );
+		toaster.allowedIdList = this.allowedIdList;
 		toaster.addrIndex = this.addrIndex;
 		toaster.usedAddrs = this.usedAddrs;
 		toaster.outputList = this.outputList;
@@ -159,6 +163,16 @@ export class Toaster {
 		toaster.trail = this.trail.concat( entry );
 
 		return toaster;
+	}
+
+	rejectId( obj: any, i: string | number ): boolean {
+		return this.allowedIdList &&
+			   obj && 
+			   obj[i] && 
+			   typeof( obj[i] ) == 'object' && 
+			   typeof( obj[i].id ) == 'number' &&
+			   obj[i].id >= 0 &&
+			   !this.allowedIdList.includes( obj[i].id );
 	}
 
 	/**
@@ -325,13 +339,16 @@ export function singleToJSON( obj: any,
 
 export function listToJSON( list: Array<any>, 
 							constructors: Dict<FactoryFunc>,
-							nameMap?: Dict<string> ): any {
+							nameMap?: Dict<string>,
+							allowedIdList?: Array<number> ): any {
 	if ( nameMap === undefined ) nameMap = {};
+	if ( allowedIdList === undefined ) allowedIdList = null;
 
 	let output: Array<any> = [];
 
 	log.TRAIL = '';
 	let toaster = new Toaster( constructors, nameMap );
+	toaster.allowedIdList = allowedIdList;
 
 	try {
 		// write the list objects first, so they get the first list.length addresses
@@ -340,8 +357,9 @@ export function listToJSON( list: Array<any>,
 		}
 
 		for ( let i = 0; i < list.length; i++ ) {
-			setJSON( output, i, list[i], toaster, true );
-			//output[i] = toJSON( list[i], toaster.copy( new TrailEntry( list[i], i ) ), true );
+			if ( !toaster.rejectId( list, i ) ) {
+				output.push( toJSON( list[i], toaster.copy( new TrailEntry( list[i], i ) ), true ) );
+			}
 		}
 
 		// delete ids with no pointers
@@ -446,13 +464,36 @@ export function toJSON( obj: any, toaster: Toaster, toplevel: boolean=false ): a
 					target = flat['__array__'];
 				}
 
-				// keys of an {}, indices of a []
-				for ( let varname in obj ) {
-					if ( varname == '__written__') continue;
+				/*
+					NOTE:
+					since javascript doesn't make a distinction between structs (objects of a fixed size)
+					and dicts (objects of unbounded size), it is unclear whether a rejected entry
+					should be blanked by using the 'delete' keyword or setting the value to null. 
 
-					setJSON( target, varname, obj[varname], toaster );
-					//target[varname] = toJSON( obj[varname], 
-					//						  toaster.copy( new TrailEntry( obj[varname], varname ) ) );			
+					I have chosen the latter, since dicts usually end up evolving into some other data structure
+
+					Another approach would be to add type annotation to each object, but this would increase
+					development overhead beyond the already-confusing splitting of constructors
+				 */
+
+				// keys of an {}, indices of a []
+				let isArray = obj instanceof Array;
+
+				for ( let varname in obj ) {
+					if ( varname == '__id__' ) continue;
+					if ( varname == '__written__' ) continue;
+
+					if ( isArray ) {
+						if ( !toaster.rejectId( obj, varname ) ) {
+							target.push( toJSON( obj[varname as any], toaster.copy( new TrailEntry( obj[varname as any], varname ) ) ) );
+						}
+					} else {
+						if ( toaster.rejectId( obj, varname ) ) {
+							target[varname] = null;
+						} else {
+							setJSON( target, varname, obj[varname], toaster );
+						}
+					}
 				}
 			}
 
@@ -465,7 +506,7 @@ export function toJSON( obj: any, toaster: Toaster, toplevel: boolean=false ): a
 
 		// other literals
 		} else {
-			return obj
+			return obj;
 		}
 
 	} catch ( ex ) {
@@ -525,17 +566,17 @@ function indexOnRead( json: any, obj: any, toaster: Toaster ) {
 }
 
 type FromJSONOptions = {
-	warnExternal?: boolean; // warn user of top-level primtives that are not in the 
+	allowedIdList?: Array<number>; 
 }
 
 export function fromJSON( json: any, toaster: Toaster, options: FromJSONOptions={} ): any {
-	if ( options.warnExternal === undefined ) options.warnExternal = true;
+	if ( options.allowedIdList === undefined ) options.allowedIdList = null;
 
 	log.TRAIL = '';
 
 	let obj = fromJSONRecur( json, toaster );
 
-	resolveObject( obj, toaster );
+	resolveObject( obj, toaster, options.allowedIdList );
 
 	return obj;
 }
@@ -607,7 +648,7 @@ function fromJSONRecur( json: any, toaster: Toaster ) {
  * @param {any} a JSON object created with toastpoint
  * @param {Toaster}
  */
-function resolveObject( obj: any, toaster: Toaster ) {
+function resolveObject( obj: any, toaster: Toaster, allowedIdList: Array<number> ) {
 
 	// ignore null/undefined and non-objects
 	if ( !obj || typeof( obj ) != 'object' ) return;
@@ -631,8 +672,15 @@ function resolveObject( obj: any, toaster: Toaster ) {
 	// can't remember why this isn't just:
 	// for ( let i in obj )
 	if ( obj instanceof Array ) {
-		for ( let i = 0; i < obj.length; i++ ) {
-			resolveField( obj, i, toaster.copy( new TrailEntry( obj[i], i ) ) );
+		// for ( let i = 0; i < obj.length; i++ ) {
+		// 	resolveField( obj, i, toaster.copy( new TrailEntry( obj[i], i ) ), allowedIdList );
+		// }
+		for ( let i = obj.length - 1; i >= 0; i-- ) {
+			// if ( rejectId( obj, i, allowedIdList ) ) {
+			// 	obj.splice( i, 1 );
+			// } else {
+				resolveField( obj, i, toaster.copy( new TrailEntry( obj[i], i ) ), allowedIdList );
+			//}
 		}
 
 	} else if ( obj instanceof Object ) {
@@ -641,7 +689,11 @@ function resolveObject( obj: any, toaster: Toaster ) {
 		}
 
 		for ( let i in obj ) {
-			resolveField( obj, i, toaster.copy( new TrailEntry( obj[i], i ) ) );
+			// if ( rejectId( obj, i, allowedIdList ) ) {
+			// 	obj[i] = null;
+			// } else {
+				resolveField( obj, i, toaster.copy( new TrailEntry( obj[i], i ) ), allowedIdList );
+			//}
 		}
 
 	} else {
@@ -659,7 +711,7 @@ function resolveObject( obj: any, toaster: Toaster ) {
  * @param {string | number} variable name or array index
  * @param {Toaster} 
  */
-function resolveField( obj: any, i: string | number, toaster: Toaster ) {
+function resolveField( obj: any, i: string | number, toaster: Toaster, allowedIdList: Array<number> ) {
 	if ( obj[i] instanceof Object ) {
 		if ( '__pointer__' in obj[i] ) {
 
@@ -677,53 +729,8 @@ function resolveField( obj: any, i: string | number, toaster: Toaster ) {
 		} else {
 
 			// don't make a new Toaster here as the trail was already appended to
-			resolveObject( obj[i], toaster );
+			resolveObject( obj[i], toaster, allowedIdList );
 		}
-	}
-}
-
-function idFilter( obj: any, i: string | number, idList: Array<number> ): boolean {
-	return obj && 
-		   obj[i] && 
-		   typeof( obj[i] ) == 'object' && 
-		   typeof( obj[i].id ) == 'number' &&
-		   obj[i].id >= 0 &&
-		   !idList.includes( obj[i].id );
-}
-
-export function pruneList( obj: any, idList: Array<number> ) {
-
-	// ignore null/undefined and non-objects
-	if ( !obj || typeof( obj ) != 'object' ) return;
-
-	if ( obj instanceof Array ) {
-		for ( let i = obj.length - 1; i >= 0; i-- ) {
-			if ( idFilter( obj, i, idList ) ) {
-				obj.splice( i, 1 );
-			} else {
-				pruneList( obj[i], idList );
-			}
-		}
-
-	// does not properly handle dicts of objects (nulls the entry rather than deleting it)
-	} else if ( obj instanceof Object ) {
-		let toRemove: Array<string> = [];
-
-		for ( let i in obj ) {
-			if ( idFilter( obj, i, idList ) ) {
-				//toRemove.push( i );
-				obj[i] = null;
-			} else {
-				pruneList( obj[i], idList );
-			}
-		}
-
-		for ( let varname of toRemove ) {
-			delete obj[varname];
-		}
-
-	} else {
-		return;
 	}
 }
 
