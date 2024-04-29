@@ -1,3 +1,20 @@
+/*
+	File Versions
+	
+	1:
+		__id__ fields with no pointers removed (to save space)
+		fromJSON uses recursive versions of resolveObject and resolveField
+		no version marker
+
+	2:
+		all __id__ fields retained
+		fromJSON uses non-recursive versions of resolveObject and resolveField
+			this allows loops in constructors
+
+		output encapsulated in an object like so: { tp_version: 2, data: output }
+			this more clearly defines the scope of each set of __id__ fields
+ */
+
 export let config: { [key: string]: any } = {
 	PRINT: false,
 	DEBUG: false,
@@ -128,7 +145,7 @@ export class Toaster {
 	 // list of functions used to instantiate classes
 	constructors: Dict<FactoryFunc> = {};
 
-	// object ids to be saved / loaded (ignore if null)
+	// object ids to be saved / loaded (ignore if null) (obj.id, not obj.__id__)
 	allowedIdList: Array<number> | null = null;
 
 	// mapping of class names to try and translate obfuscated code
@@ -282,8 +299,7 @@ export class Toaster {
 		} else if ( name in this.nameMap ) {
 			return this.nameMap[name];
 
-		} else if ( Object.keys( this.nameMap ).length == 0 && 
-					name in this.constructors ) {
+		} else if ( name in this.constructors ) {
 			return name;
 
 		} else {
@@ -324,7 +340,7 @@ export class Toaster {
 }
 
 /* 
-	Write Functions
+	Write Functions (Entire File)
 */
 
 export function singleToJSON( obj: any,
@@ -334,7 +350,10 @@ export function singleToJSON( obj: any,
 
 	let list = listToJSON( [obj], constructors, nameMap );
 
-	return list[0];
+	let output = list;
+	output.data = output.data[0];
+
+	return output;
 }
 
 export function listToJSON( list: Array<any>, 
@@ -363,9 +382,22 @@ export function listToJSON( list: Array<any>,
 		}
 
 		// delete ids with no pointers
+		/*
+			Note that NOT doing this (version 2) means that files get about 10% larger with unused pointers (and
+			would get much larger if they consisted of thousands of Vec2s). Consider tracking whether a toaster
+			creates any pointers inside an object, and deleting the id if not. Also note that the main advantage
+			gained by removing the paramter is readability, since the savings are not huge in terms of disk space:
+
+			version 1 file: 100kB 
+			version 2 file: 110kB <-- the extra 10kB here could be removed
+			version 2 file, zipped: 10kB
+			version 2 file, no whitespace: 40kB
+			version 2 file, no whitespace, zipped: 8kB
+		*/
+
 		for ( let obj of toaster.outputList ) {
 			if ( '__id__' in obj && !( obj['__id__'] in toaster.usedAddrs ) ) {
-				delete obj['__id__'];
+				//delete obj['__id__'];
 			}
 		}
 
@@ -376,8 +408,16 @@ export function listToJSON( list: Array<any>,
 		toaster.cleanAddrIndex();
 	}
 
-	return output;
+	for ( let error of toaster.errors ) {
+		console.error( toaster.errors );
+	}
+
+	return { tp_version: 2, data: output };
 }
+
+/*
+	Write Functions (Object)
+ */
 
 export function setMultiJSON( target: any,
 							  varnames: Array<string | number>,
@@ -406,14 +446,15 @@ export function setMultiJSON( target: any,
  */
 export function setJSON( target: any, 
 						 varname: string | number, 
-						 obj: any, 
+						 value: any, 
 						 toaster: Toaster, 
 						 toplevel: boolean=false ) {
 
 	if ( varname == '__written__' ) return;
+	if ( typeof value == 'function' ) return;
 
-	target[varname] = toJSON( obj, 
-							  toaster.copy( new TrailEntry( obj, varname ) ), 
+	target[varname] = toJSON( value, 
+							  toaster.copy( new TrailEntry( value, varname ) ), 
 							  toplevel );
 }
 
@@ -574,9 +615,29 @@ export function fromJSON( json: any, toaster: Toaster, options: FromJSONOptions=
 
 	log.TRAIL = '';
 
-	let obj = fromJSONRecur( json, toaster );
+	let tp_version = 1;
+	let data = json;
 
-	resolveObject( obj, toaster, options.allowedIdList );
+	if ( json instanceof Object && 'tp_version' in json ) {
+		let val = json['tp_version']
+		if ( typeof val == 'number' ) {
+			tp_version = val;
+		} else {
+			console.warn( 'fromJSON(): invalid version ' + val + ', reverting to ' + tp_version );
+		}
+
+		data = json['data'];
+	}
+
+	let obj = fromJSONRecur( data, toaster );
+
+	if ( tp_version >= 2 ) {
+		for ( let obj of toaster.addrIndex ) {
+			resolveObjectFlat( obj, toaster );
+		}
+	} else {
+		resolveObject( obj, toaster, options.allowedIdList );
+	}
 
 	return obj;
 }
@@ -701,6 +762,49 @@ function resolveObject( obj: any, toaster: Toaster, allowedIdList: Array<number>
 	}
 }
 
+function resolveObjectFlat( obj: any, toaster: Toaster ) {
+
+	// ignore null/undefined and non-objects
+	if ( !obj || typeof( obj ) != 'object' ) return;
+
+	// ignore objects that are not in the constructors dict (created inside of other objects by fromJSON)
+	if ( !toaster.getName( obj ) ) return;
+
+
+	if ( config.DEBUG ) printFinalVar( toaster.trail, { reading: true } );
+
+	// can't remember why this isn't just:
+	// for ( let i in obj )
+	if ( obj instanceof Array ) {
+		// for ( let i = 0; i < obj.length; i++ ) {
+		// 	resolveField( obj, i, toaster.copy( new TrailEntry( obj[i], i ) ), allowedIdList );
+		// }
+		for ( let i = obj.length - 1; i >= 0; i-- ) {
+			// if ( rejectId( obj, i, allowedIdList ) ) {
+			// 	obj.splice( i, 1 );
+			// } else {
+				resolveFieldFlat( obj, i, toaster.copy( new TrailEntry( obj[i], i ) ) );
+			//}
+		}
+
+	} else if ( obj instanceof Object ) {
+		if ( obj['__pointer__'] ) {
+			throw new Error( 'Recursing too deep (should have resolved pointer)' );
+		}
+
+		for ( let i in obj ) {
+			// if ( rejectId( obj, i, allowedIdList ) ) {
+			// 	obj[i] = null;
+			// } else {
+				resolveFieldFlat( obj, i, toaster.copy( new TrailEntry( obj[i], i ) ) );
+			//}
+		}
+
+	} else {
+		return;
+	}
+}
+
 /**
  * if an object is a pointer, return the object that pointer points to
  * (dereference the pointer)
@@ -730,6 +834,24 @@ function resolveField( obj: any, i: string | number, toaster: Toaster, allowedId
 
 			// don't make a new Toaster here as the trail was already appended to
 			resolveObject( obj[i], toaster, allowedIdList );
+		}
+	}
+}
+
+function resolveFieldFlat( obj: any, i: string | number, toaster: Toaster ) {
+	if ( obj[i] instanceof Object ) {
+		if ( '__pointer__' in obj[i] ) {
+
+			let addr = obj[i]['__pointer__'];
+
+			if ( !( addr in toaster.addrIndex ) ) {
+				console.error( toaster.trailToString() );
+				console.error( 'resolveField: no pointer with id ' + addr );
+				
+				obj[i] = null;
+			} else {
+				obj[i] = toaster.addrIndex[addr];
+			}
 		}
 	}
 }
